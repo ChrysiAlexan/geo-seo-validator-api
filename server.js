@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Fetch a URL and return the HTML
 function fetchUrl(urlStr) {
@@ -235,8 +235,24 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(results));
     } catch (err) {
       console.error(`Error analyzing ${targetUrl}:`, err.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      
+      // Handle network errors gracefully
+      if (err.message.includes('ENOTFOUND') || err.message.includes('ECONNREFUSED')) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ 
+          error: 'Network error: Unable to reach the URL. The server may be down or unreachable.',
+          details: err.message 
+        }));
+      } else if (err.message.includes('Timeout')) {
+        res.writeHead(504, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ 
+          error: 'Timeout: The page took too long to load (>10 seconds).',
+          details: err.message 
+        }));
+      } else {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
     }
     return;
   }
