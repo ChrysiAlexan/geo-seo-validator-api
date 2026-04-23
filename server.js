@@ -1,8 +1,12 @@
 const http = require('http');
 const https = require('https');
+const dns = require('dns');
 const { URL } = require('url');
 
 const PORT = process.env.PORT || 3000;
+
+// Some hosts return IPv6-first DNS answers that are unreachable in certain environments.
+dns.setDefaultResultOrder('ipv4first');
 
 // Fetch a URL and return the HTML
 function fetchUrl(urlStr) {
@@ -49,6 +53,13 @@ function fetchRobots(urlStr) {
       req.on('timeout', () => { req.destroy(); resolve(''); });
     } catch(e) { resolve(''); }
   });
+}
+
+function withWwwHost(urlStr) {
+  const parsed = new URL(urlStr);
+  if (parsed.hostname.startsWith('www.')) return urlStr;
+  parsed.hostname = `www.${parsed.hostname}`;
+  return parsed.toString();
 }
 
 // Analyze the HTML and return pillar scores
@@ -220,14 +231,36 @@ const server = http.createServer(async (req, res) => {
     try {
       console.log(`Analyzing: ${targetUrl}`);
       const startTime = Date.now();
-      
-      const [pageData, robotsTxt] = await Promise.all([
-        fetchUrl(targetUrl),
-        fetchRobots(targetUrl)
-      ]);
+
+      let finalUrl = targetUrl;
+      let pageData;
+      let robotsTxt;
+
+      try {
+        [pageData, robotsTxt] = await Promise.all([
+          fetchUrl(finalUrl),
+          fetchRobots(finalUrl)
+        ]);
+      } catch (firstErr) {
+        const canRetryWithWww =
+          firstErr &&
+          typeof firstErr.message === 'string' &&
+          firstErr.message.includes('ENOTFOUND') &&
+          !new URL(finalUrl).hostname.startsWith('www.');
+
+        if (!canRetryWithWww) throw firstErr;
+
+        finalUrl = withWwwHost(finalUrl);
+        console.log(`Retrying with www host: ${finalUrl}`);
+
+        [pageData, robotsTxt] = await Promise.all([
+          fetchUrl(finalUrl),
+          fetchRobots(finalUrl)
+        ]);
+      }
       
       const fetchTime = Date.now() - startTime;
-      const results = analyze(pageData.html, targetUrl, robotsTxt);
+      const results = analyze(pageData.html, finalUrl, robotsTxt);
       results.meta.fetchTimeMs = fetchTime;
       results.meta.statusCode = pageData.statusCode;
       
